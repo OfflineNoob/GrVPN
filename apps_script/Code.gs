@@ -19,6 +19,7 @@ function doPost(e) {
     payload: payload,
     muteHttpExceptions: true,
     followRedirects: false,
+    deadline: 30,  // seconds; our long-poll window is 8s so this is plenty
   });
   return ContentService
     .createTextOutput(resp.getContentText())

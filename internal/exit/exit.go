@@ -18,9 +18,9 @@ import (
 
 const (
 	// LongPollWindow is how long the handler holds open a request waiting for
-	// downstream bytes. Must be well under Apps Script's UrlFetchApp timeout
-	// (~60s default) and the script execution limit (6m).
-	LongPollWindow = 25 * time.Second
+	// downstream bytes. UrlFetchApp has a practical read timeout of ~10s, so
+	// keep this comfortably below that.
+	LongPollWindow = 8 * time.Second
 
 	// MaxFramePayload caps the bytes per downstream frame (matches carrier).
 	MaxFramePayload = 32 * 1024
