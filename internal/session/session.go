@@ -118,6 +118,16 @@ func (s *Session) IsDone() bool {
 // each capped at maxPayload bytes. Emits a SYN frame first if needed, and a
 // trailing FIN frame if RequestClose was called and the FIN hasn't been sent yet.
 func (s *Session) DrainTx(maxPayload int) []*frame.Frame {
+	return s.drainTx(maxPayload, 0)
+}
+
+// DrainTxLimited is like DrainTx but emits at most maxFrames frames in one
+// call (0 means unlimited). Remaining bytes stay queued for later polls.
+func (s *Session) DrainTxLimited(maxPayload, maxFrames int) []*frame.Frame {
+	return s.drainTx(maxPayload, maxFrames)
+}
+
+func (s *Session) drainTx(maxPayload, maxFrames int) []*frame.Frame {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -125,10 +135,34 @@ func (s *Session) DrainTx(maxPayload int) []*frame.Frame {
 		return nil
 	}
 
-	var frames []*frame.Frame
+	// Estimate capacity up front to avoid repeated slice growth under large
+	// uploads/downloads that split into many payload chunks.
+	estFrames := 0
+	if s.synNeeded {
+		estFrames++
+	}
+	if len(s.txBuf) > 0 {
+		if maxPayload <= 0 {
+			maxPayload = len(s.txBuf)
+		}
+		// First data chunk may ride on SYN, so payload-only frame count is
+		// bounded by ceil(len(txBuf)/maxPayload).
+		estFrames += (len(s.txBuf) + maxPayload - 1) / maxPayload
+	}
+	if s.closeReq && !s.finSent {
+		estFrames++
+	}
+	if maxFrames > 0 && estFrames > maxFrames {
+		estFrames = maxFrames
+	}
+	frames := make([]*frame.Frame, 0, estFrames)
+
+	canAppend := func() bool {
+		return maxFrames <= 0 || len(frames) < maxFrames
+	}
 
 	// SYN (possibly with first chunk of payload).
-	if s.synNeeded {
+	if s.synNeeded && canAppend() {
 		f := &frame.Frame{
 			SessionID: s.ID,
 			Seq:       s.txSeq,
@@ -149,7 +183,7 @@ func (s *Session) DrainTx(maxPayload int) []*frame.Frame {
 	}
 
 	// Remaining payload chunks.
-	for len(s.txBuf) > 0 {
+	for len(s.txBuf) > 0 && canAppend() {
 		n := len(s.txBuf)
 		if n > maxPayload {
 			n = maxPayload
@@ -165,7 +199,7 @@ func (s *Session) DrainTx(maxPayload int) []*frame.Frame {
 	}
 
 	// Trailing FIN.
-	if s.closeReq && !s.finSent {
+	if s.closeReq && !s.finSent && canAppend() {
 		frames = append(frames, &frame.Frame{
 			SessionID: s.ID,
 			Seq:       s.txSeq,

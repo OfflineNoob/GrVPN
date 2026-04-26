@@ -27,6 +27,19 @@ const (
 	// pollTimeout is the per-request HTTP ceiling; should comfortably exceed
 	// the server's long-poll window (~25s).
 	pollTimeout = 120 * time.Second
+
+	// maxDrainFramesPerSession keeps one busy session from monopolizing a poll
+	// cycle when many short-lived sessions are active (e.g., chat apps).
+	maxDrainFramesPerSession = 4
+
+	// maxDrainFramesPerBatch bounds total frames sent in one poll request so
+	// very high session fan-out does not create oversized POST bodies.
+	maxDrainFramesPerBatch = 48
+
+	// Under high fan-out (mobile apps opening many parallel connections), allow
+	// a larger but still bounded batch to reduce queueing delay.
+	busySessionThreshold       = 24
+	maxDrainFramesPerBatchBusy = 144
 )
 
 // Config bundles everything the carrier needs to talk to the relay.
@@ -164,8 +177,22 @@ func (c *Client) drainAll() []*frame.Frame {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var out []*frame.Frame
+	batchCap := maxDrainFramesPerBatch
+	if len(c.sessions) >= busySessionThreshold {
+		batchCap = maxDrainFramesPerBatchBusy
+	}
+	remaining := batchCap
 	for _, s := range c.sessions {
-		out = append(out, s.DrainTx(MaxFramePayload)...)
+		if remaining <= 0 {
+			break
+		}
+		perSessionCap := maxDrainFramesPerSession
+		if remaining < perSessionCap {
+			perSessionCap = remaining
+		}
+		frames := s.DrainTxLimited(MaxFramePayload, perSessionCap)
+		out = append(out, frames...)
+		remaining -= len(frames)
 	}
 	return out
 }

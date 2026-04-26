@@ -5,11 +5,13 @@
 package exit
 
 import (
+	"errors"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/kianmhz/relay-tunnel/internal/frame"
@@ -38,6 +40,23 @@ const (
 	// coalesceWindow lets us gather a few more frames before responding, which
 	// improves throughput for video streams under higher RTT links.
 	coalesceWindow = 25 * time.Millisecond
+
+	// maxDrainFramesPerSession keeps one hot session from dominating an entire
+	// response batch when many interactive sessions are active concurrently.
+	maxDrainFramesPerSession = 4
+
+	// maxDrainFramesPerBatch bounds total frames emitted in one HTTP response so
+	// one poll does not become a very large base64 body under high concurrency.
+	maxDrainFramesPerBatch = 48
+
+	// Under high fan-out (mobile apps opening many parallel connections), allow
+	// a larger but still bounded batch to reduce queueing delay.
+	busySessionThreshold       = 24
+	maxDrainFramesPerBatchBusy = 144
+
+	// dialFailureBackoff is how long we suppress repeated SYN dial attempts to a
+	// target after a structural network/DNS failure.
+	dialFailureBackoff = 2 * time.Second
 )
 
 // Config is the DO server's configuration.
@@ -50,9 +69,11 @@ type Config struct {
 type Server struct {
 	cfg  Config
 	aead *frame.Crypto
+	dial func(network, address string, timeout time.Duration) (net.Conn, error)
 
 	mu       sync.Mutex
 	sessions map[[frame.SessionIDLen]byte]*session.Session
+	dialFail map[string]time.Time
 
 	activity chan struct{} // buffered len 1; coalesces "session has new tx" signals
 }
@@ -66,7 +87,9 @@ func New(cfg Config) (*Server, error) {
 	return &Server{
 		cfg:      cfg,
 		aead:     aead,
+		dial:     net.DialTimeout,
 		sessions: make(map[[frame.SessionIDLen]byte]*session.Session),
+		dialFail: make(map[string]time.Time),
 		activity: make(chan struct{}, 1),
 	}, nil
 }
@@ -189,12 +212,17 @@ func (s *Server) routeIncoming(f *frame.Frame) {
 			log.Printf("[exit] frame for unknown session (no SYN), dropping")
 			return
 		}
+		if s.isDialSuppressed(f.Target) {
+			return
+		}
 		var err error
 		sess, err = s.openSession(f.SessionID, f.Target)
 		if err != nil {
+			s.recordDialFailure(f.Target, err)
 			log.Printf("[exit] dial %s: %v", f.Target, err)
 			return
 		}
+		s.clearDialFailure(f.Target)
 	}
 	sess.ProcessRx(f)
 }
@@ -202,7 +230,7 @@ func (s *Server) routeIncoming(f *frame.Frame) {
 // openSession dials the upstream target, creates a Session for the given ID,
 // registers it, and spawns the bidirectional pump goroutines.
 func (s *Server) openSession(id [frame.SessionIDLen]byte, target string) (*session.Session, error) {
-	upstream, err := net.DialTimeout("tcp", target, 15*time.Second)
+	upstream, err := s.dial("tcp", target, 15*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -253,8 +281,22 @@ func (s *Server) drainAll() []*frame.Frame {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []*frame.Frame
+	batchCap := maxDrainFramesPerBatch
+	if len(s.sessions) >= busySessionThreshold {
+		batchCap = maxDrainFramesPerBatchBusy
+	}
+	remaining := batchCap
 	for _, sess := range s.sessions {
-		out = append(out, sess.DrainTx(MaxFramePayload)...)
+		if remaining <= 0 {
+			break
+		}
+		perSessionCap := maxDrainFramesPerSession
+		if remaining < perSessionCap {
+			perSessionCap = remaining
+		}
+		frames := sess.DrainTxLimited(MaxFramePayload, perSessionCap)
+		out = append(out, frames...)
+		remaining -= len(frames)
 	}
 	return out
 }
@@ -273,5 +315,64 @@ func (s *Server) kick() {
 	select {
 	case s.activity <- struct{}{}:
 	default:
+	}
+}
+
+func (s *Server) isDialSuppressed(target string) bool {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	until, ok := s.dialFail[target]
+	if !ok {
+		return false
+	}
+	if now.After(until) {
+		delete(s.dialFail, target)
+		return false
+	}
+	return true
+}
+
+func (s *Server) recordDialFailure(target string, err error) {
+	if !isBackoffEligibleDialErr(err) {
+		return
+	}
+	s.mu.Lock()
+	s.dialFail[target] = time.Now().Add(dialFailureBackoff)
+	s.mu.Unlock()
+}
+
+func (s *Server) clearDialFailure(target string) {
+	s.mu.Lock()
+	delete(s.dialFail, target)
+	s.mu.Unlock()
+}
+
+func isBackoffEligibleDialErr(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return true
+	}
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		return false
+	}
+	if opErr.Timeout() {
+		return true
+	}
+	var errno syscall.Errno
+	if !errors.As(opErr, &errno) {
+		return false
+	}
+	switch errno {
+	case syscall.ECONNREFUSED,
+		syscall.EHOSTUNREACH,
+		syscall.ENETUNREACH,
+		syscall.ENETDOWN,
+		syscall.EADDRNOTAVAIL,
+		syscall.ETIMEDOUT:
+		return true
+	default:
+		return false
 	}
 }

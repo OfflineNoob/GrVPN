@@ -50,6 +50,41 @@ func TestDrainTx_ChunksLargePayload(t *testing.T) {
 	}
 }
 
+func TestDrainTxLimited_PartialAndResume(t *testing.T) {
+	s := New(sid(8), "x:1", false)
+	s.EnqueueTx(bytes.Repeat([]byte("B"), 250))
+
+	first := s.DrainTxLimited(100, 2)
+	if len(first) != 2 {
+		t.Fatalf("want 2 frames on first drain, got %d", len(first))
+	}
+	if first[0].Seq != 0 || first[1].Seq != 1 {
+		t.Fatalf("unexpected seq in first drain: %d %d", first[0].Seq, first[1].Seq)
+	}
+	if s.HasPendingTx() != true {
+		t.Fatal("expected pending tx after limited drain")
+	}
+
+	second := s.DrainTxLimited(100, 2)
+	if len(second) != 1 {
+		t.Fatalf("want 1 frame on second drain, got %d", len(second))
+	}
+	if second[0].Seq != 2 {
+		t.Fatalf("unexpected seq in second drain: %d", second[0].Seq)
+	}
+	if s.HasPendingTx() {
+		t.Fatal("did not expect pending tx after draining all payload")
+	}
+
+	total := 0
+	for _, f := range append(first, second...) {
+		total += len(f.Payload)
+	}
+	if total != 250 {
+		t.Fatalf("total drained bytes %d", total)
+	}
+}
+
 func TestDrainTx_EmitsFINOnClose(t *testing.T) {
 	s := New(sid(2), "x:1", false)
 	s.EnqueueTx([]byte("hi"))
