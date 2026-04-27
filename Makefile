@@ -31,14 +31,18 @@ clean:
 
 # Local cross-compile dry run, mirroring the GitHub release matrix.
 release-local:
-	@for plat in linux/amd64 linux/arm64 windows/amd64 darwin/amd64 darwin/arm64; do \
-	  os=$${plat%/*}; arch=$${plat#*/}; \
-	  name=GooseRelayVPN-$(VERSION)-$$os-$$arch; \
+	@for entry in linux/amd64 linux/arm64 linux/armv7 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do \
+	  os=$${entry%%/*}; rest=$${entry#*/}; \
+	  arch=$${rest%%v*}; arm=$$(echo $$rest | grep -oP '(?<=v)\d' || true); \
+	  plat=$$os-$$arch$$([ -n "$$arm" ] && echo "v$$arm" || true); \
 	  ext=$$([ "$$os" = "windows" ] && echo ".exe" || echo ""); \
-	  mkdir -p dist/$$name; \
-	  echo "==> $$os/$$arch"; \
-	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/$$name/goose-client$$ext ./cmd/client; \
-	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/$$name/goose-server$$ext ./cmd/server; \
-	  cp -r apps_script client_config.example.json server_config.example.json README.md dist/$$name/; \
+	  echo "==> $$plat"; \
+	  client_name=GooseRelayVPN-client-$(VERSION)-$$plat; \
+	  server_name=GooseRelayVPN-server-$(VERSION)-$$plat; \
+	  mkdir -p dist/$$client_name dist/$$server_name; \
+	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOARM=$$arm $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/$$client_name/goose-client$$ext ./cmd/client; \
+	  cp client_config.example.json dist/$$client_name/; \
+	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOARM=$$arm $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/$$server_name/goose-server$$ext ./cmd/server; \
+	  cp server_config.example.json dist/$$server_name/; \
 	done
 	@echo "==> done. binaries in dist/"

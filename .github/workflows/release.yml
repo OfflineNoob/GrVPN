@@ -20,8 +20,13 @@ jobs:
             goarch: amd64
           - goos: linux
             goarch: arm64
+          - goos: linux
+            goarch: arm
+            goarm: 7
           - goos: windows
             goarch: amd64
+          - goos: windows
+            goarch: arm64
           - goos: darwin
             goarch: amd64
           - goos: darwin
@@ -37,37 +42,42 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: '0'
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME}"
-          NAME="GooseRelayVPN-${VERSION}-${GOOS}-${GOARCH}"
-          mkdir -p "dist/$NAME"
+          PLATFORM="${GOOS}-${GOARCH}$( [ -n "${GOARM:-}" ] && echo "v${GOARM}" || true )"
           SUFFIX=""
           if [ "$GOOS" = "windows" ]; then SUFFIX=".exe"; fi
-
           LDFLAGS="-s -w -X main.version=${VERSION}"
-          go build -trimpath -ldflags "$LDFLAGS" -o "dist/$NAME/goose-client${SUFFIX}" ./cmd/client
-          go build -trimpath -ldflags "$LDFLAGS" -o "dist/$NAME/goose-server${SUFFIX}" ./cmd/server
 
-          cp client_config.example.json server_config.example.json README.md LICENSE 2>/dev/null || true
-          cp -r apps_script "dist/$NAME/"
-          cp client_config.example.json server_config.example.json "dist/$NAME/"
-          cp README.md "dist/$NAME/" 2>/dev/null || true
-          cp LICENSE "dist/$NAME/" 2>/dev/null || true
+          # --- client ---
+          CLIENT_NAME="GooseRelayVPN-client-${VERSION}-${PLATFORM}"
+          mkdir -p "dist/$CLIENT_NAME"
+          go build -trimpath -ldflags "$LDFLAGS" -o "dist/$CLIENT_NAME/goose-client${SUFFIX}" ./cmd/client
+          cp client_config.example.json "dist/$CLIENT_NAME/"
+
+          # --- server ---
+          SERVER_NAME="GooseRelayVPN-server-${VERSION}-${PLATFORM}"
+          mkdir -p "dist/$SERVER_NAME"
+          go build -trimpath -ldflags "$LDFLAGS" -o "dist/$SERVER_NAME/goose-server${SUFFIX}" ./cmd/server
+          cp server_config.example.json "dist/$SERVER_NAME/"
 
           cd dist
           if [ "$GOOS" = "windows" ]; then
-            zip -r "${NAME}.zip" "$NAME"
+            zip -r "${CLIENT_NAME}.zip" "$CLIENT_NAME"
+            zip -r "${SERVER_NAME}.zip" "$SERVER_NAME"
           else
-            tar -czf "${NAME}.tar.gz" "$NAME"
+            tar -czf "${CLIENT_NAME}.tar.gz" "$CLIENT_NAME"
+            tar -czf "${SERVER_NAME}.tar.gz" "$SERVER_NAME"
           fi
           ls -lh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.goos }}-${{ matrix.goarch }}
+          name: ${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm && format('v{0}', matrix.goarm) || '' }}
           path: |
             dist/GooseRelayVPN-*.tar.gz
             dist/GooseRelayVPN-*.zip
