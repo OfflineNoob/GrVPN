@@ -34,17 +34,17 @@ const (
 	// LongPollWindow is how long the handler holds open a request waiting for
 	// downstream bytes. UrlFetchApp has a practical read timeout of ~10s, so
 	// keep this comfortably below that.
-	LongPollWindow = 8 * time.Second
+	LongPollWindow = 10 * time.Second
 
 	// MaxFramePayload caps the bytes per downstream frame (matches carrier).
 	// Raised from 128KB: single-seal means no per-frame crypto cost, so fewer
 	// larger frames are strictly better (less length-prefix overhead, fewer
 	// Unmarshal calls). Must match the value in internal/carrier/client.go.
-	MaxFramePayload = 256 * 1024
+	MaxFramePayload = 1024 * 1024
 
 	// upstreamReadBuf is the chunk size for reading from real net.Conn before
 	// pushing to session.EnqueueTx (which then chunks into frames).
-	upstreamReadBuf = 128 * 1024
+	upstreamReadBuf = 512 * 1024
 
 	// coalesceWindow lets us gather a few more frames before responding, which
 	// improves throughput for video streams under higher RTT links.
@@ -58,16 +58,16 @@ const (
 
 	// maxDrainFramesPerSession keeps one hot session from dominating an entire
 	// response batch when many interactive sessions are active concurrently.
-	maxDrainFramesPerSession = 8
+	maxDrainFramesPerSession = 32
 
 	// maxDrainFramesPerBatch bounds total frames emitted in one HTTP response so
 	// one poll does not become a very large base64 body under high concurrency.
-	maxDrainFramesPerBatch = 48
+	maxDrainFramesPerBatch = 96
 
 	// Under high fan-out (mobile apps opening many parallel connections), allow
 	// a larger but still bounded batch to reduce queueing delay.
 	busySessionThreshold       = 24
-	maxDrainFramesPerBatchBusy = 144
+	maxDrainFramesPerBatchBusy = 192
 
 	// dialFailureBackoff is how long we suppress repeated SYN dial attempts to a
 	// target after a structural network/DNS failure.
