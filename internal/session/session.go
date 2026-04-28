@@ -16,14 +16,14 @@ import (
 
 // TxBufHighWater is the soft ceiling on the per-session tx buffer; EnqueueTx
 // blocks once exceeded so a fast SOCKS5 writer can't cause unbounded growth.
-const TxBufHighWater = 8 * 1024 * 1024
+const TxBufHighWater = 32 * 1024 * 1024
 
-// sessionFinalTimeout is the maximum time to wait for the peer's FIN after
+//  is the maximum time to wait for the peer's FIN after
 // we have sent ours. If the peer's FIN frame is lost (e.g. dropped poll
 // response), the session would stay in the map forever without this timeout,
 // causing the session table to grow unboundedly and the poll loop to slow
 // down over time as it iterates more and more dead sessions.
-const sessionFinalTimeout = 30 * time.Second
+const sessionFinalTimeout = 60 * time.Second
 
 // Session is one logical TCP connection across the relay.
 type Session struct {
@@ -68,7 +68,7 @@ func New(id [frame.SessionIDLen]byte, target string, needsSYN bool) *Session {
 		rxQueue:   make(map[uint64]*frame.Frame),
 		RxChan:    make(chan []byte, 1024),
 		synNeeded: needsSYN,
-		rxInbox:   make(chan *frame.Frame, 64),
+		rxInbox:   make(chan *frame.Frame, 128),
 		rxDone:    make(chan struct{}),
 	}
 	s.txCond = sync.NewCond(&s.mu)
