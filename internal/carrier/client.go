@@ -22,7 +22,7 @@ const (
 	// Raised from 128KB: single-seal means no per-frame crypto cost, so fewer
 	// larger frames are strictly better (less length-prefix overhead, fewer
 	// Unmarshal calls). Must match the value in internal/exit/exit.go.
-	MaxFramePayload = 256 * 1024
+	MaxFramePayload = 1024 * 1024
 
 	// pollIdleSleep is the breather between polls when nothing is happening,
 	// to avoid busy-looping if the server returns instantly with empty bodies.
@@ -30,24 +30,24 @@ const (
 
 	// pollTimeout is the per-request HTTP ceiling; should comfortably exceed
 	// the server's long-poll window (~25s).
-	pollTimeout = 120 * time.Second
+	pollTimeout = 60 * time.Second
 
 	// maxDrainFramesPerSession keeps one busy session from monopolizing a poll
 	// cycle when many short-lived sessions are active (e.g., chat apps).
-	maxDrainFramesPerSession = 8
+	maxDrainFramesPerSession = 32
 
 	// maxDrainFramesPerBatch bounds total frames sent in one poll request so
 	// very high session fan-out does not create oversized POST bodies.
-	maxDrainFramesPerBatch = 48
+	maxDrainFramesPerBatch = 96
 
 	// Under high fan-out (mobile apps opening many parallel connections), allow
 	// a larger but still bounded batch to reduce queueing delay.
 	busySessionThreshold       = 24
-	maxDrainFramesPerBatchBusy = 144
+	maxDrainFramesPerBatchBusy = 192
 
 	// Hard cap for one relay response body to avoid spending CPU/memory on
 	// unexpectedly huge non-frame payloads (HTML error pages, quota pages, etc).
-	maxRelayResponseBodyBytes = 32 * 1024 * 1024
+	maxRelayResponseBodyBytes = 64 * 1024 * 1024
 
 	// Endpoint failure backoff to shed unhealthy deployments during quota spikes
 	// or tail-latency events without changing protocol behavior.
@@ -75,7 +75,7 @@ type relayEndpoint struct {
 // goroutines eliminate head-of-line blocking: while one goroutine is blocked
 // waiting for the server's long-poll response (e.g. CDN data for session 1),
 // the others can immediately send SYNs for sessions 2, 3, 4 that queued up.
-const numPollWorkers = 3
+const numPollWorkers = 5
 
 // maxConcurrentIdlePolls limits how many workers may issue an empty poll
 // simultaneously. Empty polls are long-held by the server (LongPollWindow), so
